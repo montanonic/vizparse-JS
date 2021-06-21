@@ -1,5 +1,8 @@
 const appEl = document.getElementById('app');
 
+/// Ensures that data access has been properly subscribed to. Helps prevent bugs where we use data
+/// from state that we didn't subscribed to but waste time figuring that out because `undefined` can
+/// have multiple causes.
 const getDataHandler = (fields) => ({
     get: function (self, field) {
         let isSubscribed = false;
@@ -330,7 +333,11 @@ function numberOfLines(code) {
 ///////////////////////////
 // New reactivity design //
 ///////////////////////////
+
+// Lexing page:
 TextArea();
 CharacterView();
 NextChar();
+
+// Begin app:
 state.reactifyYourApp();
