@@ -1,0 +1,42 @@
+html, body, * {
+    box-sizing: border-box;
+}
+
+body {
+    width: 100%;
+    background-color: rgb(49, 84, 76);
+    overflow: scroll;
+}
+
+.character-view {
+    width: 100%;
+    color: whitesmoke;
+}
+
+.row {
+    width: 100%;
+    display: flex;
+    flex-direction: row;
+    width: max-content;
+}
+
+.char {
+    padding: 0 auto;
+    text-align: center;
+    margin: 0 2px 8px 2px;
+    border: 1px bisque dotted;
+    width: 20px;
+}
+
+.char.space {
+    /* visibility: hidden; */
+    padding: 5px;
+}
+
+textarea {
+    resize: none;
+}
+
+.selected.char {
+    background-color: goldenrod;
+}
