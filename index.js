@@ -1,7 +1,7 @@
 const appEl = document.getElementById('app');
 
 const getDataHandler = (fields) => ({
-    get: function (_self, field) {
+    get: function (self, field) {
         let isSubscribed = false;
         for (let subbedField of fields) {
             if (subbedField === field) {
@@ -12,7 +12,7 @@ const getDataHandler = (fields) => ({
         if (!isSubscribed) {
             throw new Error(`you're not subscribed to the field '${field}, please subscribe before attempting to access it`)
         } else {
-            return state.data[field];
+            return self[field];
         }
     }
 });
@@ -270,37 +270,35 @@ function CharacterView() {
 }
 
 function NextChar() {
+    const makeListener = (data) => {
+        let listener = () => {
+            let updated = { currentCharIndex: data.currentCharIndex + 1 };
+            if (!data.lexingStarted) {
+                updated.lexingStarted = true;
+            }
+            state.setData(updated);
+        }
+        currentListener = listener;
+        return listener;
+    };
+    currentListener = null;
     const obj = {
         mountNode: null,
         mount({ data }) {
             const nextCharButton = document.createElement('button');
             nextCharButton.innerHTML = "Next Char"
-            nextCharButton.addEventListener('click', () => {
-                let updated = { currentCharIndex: data.currentCharIndex + 1 };
-                if (!data.lexingStarted) {
-                    updated.lexingStarted = true;
-                }
-                state.setData(updated);
-            });
+            nextCharButton.addEventListener('click', makeListener(data));
             this.mountNode = nextCharButton;
             appEl.append(this.mountNode);
         },
+        update({ data }) {
+            this.mountNode.removeEventListener('click', currentListener);
+            this.mountNode.addEventListener('click', makeListener(data));
+        }
     };
 
     state.subscribe(obj, ['currentCharIndex', 'lexingStarted']);
 }
-
-const code = `
-function garbage(x, y) {
-    return x + y;
-}
-
-if garbage(3, 4) != 10 {
-    console.log("we're safe!")
-} 
-else {
-    // cry
-}`.trim();
 
 function longestCodeLineLength(code) {
     const lines = code.split('\n');
@@ -316,93 +314,6 @@ function longestCodeLineLength(code) {
 function numberOfLines(code) {
     return code.split('\n').length;
 }
-
-let currentText = code;
-let textarea = document.createElement('textarea');
-textarea.textContent = currentText;
-updateTextArea(currentText, true);
-function updateTextArea(currentText, no) {
-    currentText = currentText;
-    textarea.rows = numberOfLines(currentText);
-    textarea.cols = longestCodeLineLength(currentText) - 1;
-    no || updateCharacterView(currentText);
-}
-textarea.addEventListener('keydown', e => updateTextArea(e.target.value));
-textarea.addEventListener('keyup', e => updateTextArea(e.target.value));
-textarea.addEventListener('keypress', e => updateTextArea(e.target.value));
-
-appEl.append(textarea);
-
-/// Next-up, the character view
-
-let charId = 0;
-
-// line: String
-// return: HTML
-function createLineOfChars(line) {
-    let row = document.createElement('row');
-    row.className = "row";
-
-    for (char of line.split('')) {
-        let div = document.createElement('div');
-        div.innerHTML = char;
-        div.className = "char";
-        div.id = `char-${charId}`;
-        charId += 1;
-
-        if (char == ' ') {
-            div.className += ' space';
-        }
-
-        row.append(div);
-    }
-    return row;
-}
-
-function characterView(currentText) {
-    charId = 0;
-    const container = document.createElement('div');
-    container.id = 'character-view';
-    container.className = 'character-view';
-    for (line of currentText.split('\n')) {
-        let row = createLineOfChars(line);
-        container.append(row);
-    }
-    return container;
-}
-
-// Updating many DOM nodes is slow, but this at least gives reactivity without front-end mess. I can
-// add some simple VDom stuff if necessary later.
-function updateCharacterView(currentText) {
-    const container = characterView(currentText);
-    document.getElementById('character-view').innerHTML = container.innerHTML;
-}
-
-appEl.append(characterView(currentText));
-
-let lexingStarted = false;
-let currentCharIndex = 0;
-let selectedCharBuffer = [];
-
-function nextChar() {
-    if (!lexingStarted) {
-        textarea.disabled = true;
-        lexingStarted = true;
-    }
-
-    const selectedChar = document.getElementById(`char-${currentCharIndex}`);
-    selectedChar.className += ' selected';
-    selectedCharBuffer.push(selectedChar);
-    currentCharIndex += 1;
-}
-
-const nextCharButton = document.createElement('button');
-nextCharButton.innerHTML = "Next Char"
-nextCharButton.addEventListener('click', () => {
-    nextChar();
-});
-
-appEl.append(nextCharButton);
 
 
 ///////////////////////////
