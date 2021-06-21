@@ -68,9 +68,21 @@ else {
             data = new Proxy(data, getDataHandler(fields));
 
             component.mount({ data });
-            // Give component a local copy of its data:
-            component.data = data;
+            component.mountAndUpdate && component.mountAndUpdate({ data });
         }
+
+        ////////////////////
+        // MountAndUpdate //
+        ////////////////////
+
+        // This is code that runs for *both* mount and update. The ordering is that it runs right
+        // after initial mount, and then runs *before* every update. This is just because it
+        // visually makes sense for this function to be sandwhiched between mount and update, as
+        // there are almost always things you only want to run on mount, and then run some
+        // longer-living code after.
+
+        // You'll notice that this code is merely added in the Mount and Update cycles. It's a
+        // one-liner.
 
         ////////////
         // Update //
@@ -122,9 +134,8 @@ else {
                 // Alternatively, since we pass data in, if we make data a deep clone, then any
                 // mutation won't affect it. I do this:
                 for (let [component, data] of componentsToUpdate) {
+                    component.mountAndUpdate && component.mountAndUpdate({ data });
                     component.update && component.update({ data });
-                    // Give component a local copy of its data:
-                    component.data = data;
                 }
                 // Clear the set, as all fields have been changed.
                 this.changedFields = new Set();
@@ -270,30 +281,30 @@ function CharacterView() {
 }
 
 function NextChar() {
-    const makeListener = (data) => {
-        let listener = () => {
-            let updated = { currentCharIndex: data.currentCharIndex + 1 };
-            if (!data.lexingStarted) {
-                updated.lexingStarted = true;
-            }
-            state.setData(updated);
-        }
-        currentListener = listener;
-        return listener;
-    };
+    // The current scheme is to create a new onClick function every update. An alternative would be
+    // to query the *current* state in this function, meaning it would not have to be updated.
+    //
+    // However, I'd need to work out if that is actually safe. Currently, data is updated in a
+    // regimented way, and components only access data they are subscribed to. This is probably a
+    // good thing.
+
     currentListener = null;
     const obj = {
         mountNode: null,
-        mount({ data }) {
+        mount() {
             const nextCharButton = document.createElement('button');
             nextCharButton.innerHTML = "Next Char"
-            nextCharButton.addEventListener('click', makeListener(data));
             this.mountNode = nextCharButton;
             appEl.append(this.mountNode);
         },
-        update({ data }) {
-            this.mountNode.removeEventListener('click', currentListener);
-            this.mountNode.addEventListener('click', makeListener(data));
+        mountAndUpdate({ data }) {
+            this.mountNode.onclick = () => {
+                let updated = { currentCharIndex: data.currentCharIndex + 1 };
+                if (!data.lexingStarted) {
+                    updated.lexingStarted = true;
+                }
+                state.setData(updated);
+            }
         }
     };
 
