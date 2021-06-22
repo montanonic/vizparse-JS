@@ -1,8 +1,8 @@
 const appEl = document.getElementById('app');
 
-/// Ensures that data access has been properly subscribed to. Helps prevent bugs where we use data
-/// from state that we didn't subscribed to but waste time figuring that out because `undefined` can
-/// have multiple causes.
+/// Ensures that data access has been properly subscribed to. Helps prevent bugs where we try to use
+/// data from state that we didn't subscribe to but waste time figuring that out because `undefined`
+/// can have multiple causes.
 const getDataHandler = (fields) => ({
     get: function (self, field) {
         let isSubscribed = false;
@@ -39,15 +39,27 @@ else {
 
         lexingStarted: false,
         currentCharIndex: 0,
+        tokenRules: [
+            // {
+            //     name: "identifier",
+            //     process(str, start, cur) {
+            //         let first = str[start];
+            //         notWhitespace
+            //     },
+            //     matcher(chars) {
+            //         return /^([a-zA-Z]|_)([a-zA-Z0-9_])*$/.test(chars);
+            //     },
+            //     examples: ['john', '_func', '_', 'John_Adams', 'FOOL', 'jim1_23', 'x1', 'y2']
+            // }
+        ],
+        // This will be a lookup table of all code examples. You can set a name and it will
+        // auto-save when you select a new one. This let's you iteratively test.
+        codeExamples: {}
     },
 
-    setData(obj) {
-        let dataObj = obj;
-        if (typeof obj === 'function') {
-            // create the next data
-            dataObj = obj(cloneDeep(this.data));
-        }
-
+    /// Takes an object containing the fields you wish to update in the state along with their new
+    /// values.
+    setData(dataObj) {
         for (let field in dataObj) {
             this.data[field] = dataObj[field];
             this.changedFields.add(field);
@@ -80,7 +92,7 @@ else {
 
         // This is code that runs for *both* mount and update. The ordering is that it runs right
         // after initial mount, and then runs *before* every update. This is just because it
-        // visually makes sense for this function to be sandwhiched between mount and update, as
+        // visually makes sense for this function to be sandwiched between mount and update, as
         // there are almost always things you only want to run on mount, and then run some
         // longer-living code after.
 
@@ -134,8 +146,27 @@ else {
                 // we'll be fine. So let's make that a restriction for now and see how that pans
                 // out.
                 //
-                // Alternatively, since we pass data in, if we make data a deep clone, then any
-                // mutation won't affect it. I do this:
+                // Alternatively, (and I have indeed implemented this solution since documenting
+                // here) since the central data that components use for updates is passed in to
+                // them, if we make data a deep clone, then any mutation within a component won't
+                // affect central state: only setData will affect central state. This *still* means
+                // that central data can be changed by setData calls in update code, however, the
+                // data being passed to each component will *not* be affected by those mutations,
+                // because they are copies.
+                //
+                // Thus, components that don't access state.data directly use data that's fully
+                // isolated from our central state, and only setData can change it, which we
+                // metaphorically think of as sending a drone request to central state.
+                //
+                // It is important to note that a component *can* choose to update state internally
+                // and not notify central. This is a bit problematic because no other components can
+                // access such data in a reactive way, and further, DOM updates have to be handled
+                // directly by the component. Even `update` won't work as intended, because it won't
+                // have access to the `data` values and whatever else central state provides,
+                // requiring manual passing of those values. Perhaps the "correct" way to do that in
+                // those cases is to keep an internal buffer of the data stored every update, and
+                // use that value in manual calls to update. As long as the synchronization code is
+                // correct, that will ensure that the values are always up-to-date from central.
                 for (let [component, data] of componentsToUpdate) {
                     component.mountAndUpdate && component.mountAndUpdate({ data });
                     component.update && component.update({ data });
@@ -146,7 +177,11 @@ else {
                 // Do nothing
             }
 
-            // This triggers a loop of this function. Not sure how expensive it will be?
+            // This triggers a loop of this function, but throttled to be only as fast as the DOM
+            // can visually update. Infinite loops are possible, but will not gobble up all the CPU
+            // because of this throttling. That said, I'm not sure how expensive doing things this
+            // way will be; it might be worth cancelling the loop when there are no data changes
+            // mid-loop, and wait for the next time setData is called to start up again.
             window.requestAnimationFrame(callback);
         };
         window.requestAnimationFrame(callback);
@@ -178,6 +213,7 @@ function cloneDeep(data) {
             let val = data[key];
             ret[key] = cloneDeep(val);
         }
+        return ret;
     }
 }
 
@@ -222,6 +258,21 @@ function TextArea() {
 
     state.subscribe(obj, ['code', 'lexingStarted']);
 };
+
+function longestCodeLineLength(code) {
+    const lines = code.split('\n');
+    let longest = "";
+    for (line of lines) {
+        if (line.length > longest.length) {
+            longest = line;
+        }
+    }
+    return longest.length;
+}
+
+function numberOfLines(code) {
+    return code.split('\n').length;
+}
 
 /// The id-generation code assumes only one character view exists at a time.
 function CharacterView() {
@@ -314,21 +365,44 @@ function NextChar() {
     state.subscribe(obj, ['currentCharIndex', 'lexingStarted']);
 }
 
-function longestCodeLineLength(code) {
-    const lines = code.split('\n');
-    let longest = "";
-    for (line of lines) {
-        if (line.length > longest.length) {
-            longest = line;
+function ExampleSwitcher() {
+    const obj = {
+        mountNode: null,
+        mount({ data }) {
+
+            this.mountNode = container;
+            appEl.append(this.mountNode);
+        },
+        update({ data }) {
+            charId = 0;
+            this.mountNode.innerHTML = buildCharacterView(data.code, data.currentCharIndex).innerHTML;
+        }
+    };
+
+    state.subscribe(obj, ['']);
+}
+
+///////////
+// Token //
+///////////
+function validateRuleExamples(tokenRule) {
+    let failed;
+    for (let example of tokenRule.examples) {
+        if (!tokenRule.matcher(example)) {
+            failed = example;
+            break;
         }
     }
-    return longest.length;
+    if (failed) {
+        return failed;
+    } else {
+        return true;
+    }
 }
 
-function numberOfLines(code) {
-    return code.split('\n').length;
+function notWhitespace(str) {
+    return !/\s+/s.test(str);
 }
-
 
 ///////////////////////////
 // New reactivity design //
@@ -339,5 +413,14 @@ TextArea();
 CharacterView();
 NextChar();
 
+
 // Begin app:
 state.reactifyYourApp();
+
+// Validate token examples for debugging:
+for (let rule of state.data.tokenRules) {
+    let res = validateRuleExamples(rule);
+    if (res !== true) {
+        console.log(`rule ${rule.name} failed on ${res}`);
+    }
+}
