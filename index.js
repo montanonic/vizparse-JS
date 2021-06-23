@@ -25,18 +25,6 @@ const getDataHandler = (fields) => ({
 /// an issue, at cost of performance.
 const state = {
     data: {
-        code: `
-function garbage(x, y) {
-    return x + y;
-}
-
-if garbage(3, 4) != 10 {
-    console.log("we're safe!")
-} 
-else {
-    // cry
-}`.trim(),
-
         lexingStarted: false,
         currentCharIndex: 0,
         tokenRules: [
@@ -52,9 +40,20 @@ else {
             //     examples: ['john', '_func', '_', 'John_Adams', 'FOOL', 'jim1_23', 'x1', 'y2']
             // }
         ],
+        selectedCodeExample: `
+function garbage(x, y) {
+    return x + y;
+}
+
+if garbage(3, 4) != 10 {
+    console.log("we're safe!")
+} 
+else {
+    // cry
+}`.trim(),
         // This will be a lookup table of all code examples. You can set a name and it will
         // auto-save when you select a new one. This let's you iteratively test.
-        codeExamples: {}
+        codeExamples: {},
     },
 
     /// Takes an object containing the fields you wish to update in the state along with their new
@@ -66,6 +65,25 @@ else {
         }
     },
 
+    /// Accesses are the same as fields in terms of data access, however, they don't lead to a
+    /// subscription effect when they change.
+    setupDataForPassingToComponents(fields, accesses) {
+        // Prepare to grab all fields + non-subscribed accesses from our state's data.
+        fields = [...fields, ...accesses];
+        let data = {};
+        // Get the data for all the fields the component is subscribed to. We do
+        // a deep clone of each fetched field here, ensuring that any mutation
+        // doesn't alter the root state unless given as a return value in
+        // setData.
+        for (let field of fields) {
+            data[field] = cloneDeep(this.data[field]);
+        }
+        // Add get handlers for the data to ensure only subscribed fields are
+        // accessed.
+        data = new Proxy(data, getDataHandler(fields));
+        return data;
+    },
+
     /// Use this to set-up reactivity amongst your components. It will mount them all, using their
     /// mount code, and then update them when state changes are made. State is centralized here, and
     /// all changes propagate here.
@@ -73,14 +91,10 @@ else {
         ///////////
         // Mount //
         ///////////
-        for (let [component, fields] of this.subscribedComponents) {
+        for (let [component, fields, opts] of this.subscribedComponents) {
             // This proxy wrapping code should be the same as the update. So we'll likely want to
             // abstract the code out.
-            let data = {};
-            for (let field of fields) {
-                data[field] = cloneDeep(this.data[field]);
-            }
-            data = new Proxy(data, getDataHandler(fields));
+            const data = this.setupDataForPassingToComponents(fields, opts.accesses);
 
             component.mount({ data });
             component.mountAndUpdate && component.mountAndUpdate({ data });
@@ -107,22 +121,12 @@ else {
                 // Iterate through all components that are subscribed and check to see if any of the
                 // fields it subscribed to changed.
                 let componentsToUpdate = [];
-                for (let [component, fields] of this.subscribedComponents) {
+                for (let [component, fields, opts] of this.subscribedComponents) {
                     for (field of fields) {
                         if (this.changedFields.has(field)) {
                             // The component needs to be updated.
 
-                            let data = {};
-                            // Get the data for all the fields the component is subscribed to. We do
-                            // a deep clone of each fetched field here, ensuring that any mutation
-                            // doesn't alter the root state unless given as a return value in
-                            // setData.
-                            for (let field of fields) {
-                                data[field] = cloneDeep(this.data[field]);
-                            }
-                            // Add get handlers for the data to ensure only subscribed fields are
-                            // accessed.
-                            data = new Proxy(data, getDataHandler(fields));
+                            const data = this.setupDataForPassingToComponents(fields, opts.accesses);
 
                             // The update code itself might call setData, but because we only update
                             // components every animation frame, this should not result in any
@@ -167,7 +171,7 @@ else {
                 // those cases is to keep an internal buffer of the data stored every update, and
                 // use that value in manual calls to update. As long as the synchronization code is
                 // correct, that will ensure that the values are always up-to-date from central.
-                for (let [component, data] of componentsToUpdate) {
+                for (let [component, data, _opts] of componentsToUpdate) {
                     component.mountAndUpdate && component.mountAndUpdate({ data });
                     component.update && component.update({ data });
                 }
@@ -187,12 +191,12 @@ else {
         window.requestAnimationFrame(callback);
     },
 
-    // A list of tuples with the component, and the fields it's subscribed to.
+    // A list of tuples with the component, the fields it's subscribed to, and additional options.
     subscribedComponents: [],
     changedFields: new Set(),
 
-    subscribe(component, fields) {
-        this.subscribedComponents.push([component, fields]);
+    subscribe(component, fields, opts = { accesses: [] }) {
+        this.subscribedComponents.push([component, fields, opts]);
     }
 };
 
@@ -221,12 +225,27 @@ function cloneDeep(data) {
 // field that doesn't exist in a state.
 
 function TextArea() {
+    function longestCodeLineLength(code) {
+        const lines = code.split('\n');
+        let longest = "";
+        for (line of lines) {
+            if (line.length > longest.length) {
+                longest = line;
+            }
+        }
+        return longest.length;
+    }
+
+    function numberOfLines(code) {
+        return code.split('\n').length;
+    }
+
     const obj = {
         mountNode: null,
         mount({ data }) {
-            const { code } = data;
+            const { selectedCodeExample } = data;
 
-            let currentText = code;
+            let currentText = selectedCodeExample;
             let textarea = document.createElement('textarea');
             this.mountNode = textarea;
             textarea.textContent = currentText;
@@ -244,35 +263,20 @@ function TextArea() {
             this.mountNode.cols = longestCodeLineLength(currentText) - 1;
             this.mountNode.textContent = currentText;
             if (setData) {
-                state.setData({ code: currentText });
+                state.setData({ selectedCodeExample: currentText });
             }
         },
         update({ data }) {
-            const { code, lexingStarted } = data;
-            this.updateTextArea(code);
+            const { selectedCodeExample, lexingStarted } = data;
+            this.updateTextArea(selectedCodeExample);
             if (lexingStarted) {
                 this.mountNode.disabled = true;
             }
         }
     };
 
-    state.subscribe(obj, ['code', 'lexingStarted']);
+    state.subscribe(obj, ['selectedCodeExample', 'lexingStarted']);
 };
-
-function longestCodeLineLength(code) {
-    const lines = code.split('\n');
-    let longest = "";
-    for (line of lines) {
-        if (line.length > longest.length) {
-            longest = line;
-        }
-    }
-    return longest.length;
-}
-
-function numberOfLines(code) {
-    return code.split('\n').length;
-}
 
 /// The id-generation code assumes only one character view exists at a time.
 function CharacterView() {
@@ -318,7 +322,7 @@ function CharacterView() {
     const obj = {
         mountNode: null,
         mount({ data }) {
-            const container = buildCharacterView(data.code, data.currentCharIndex);
+            const container = buildCharacterView(data.selectedCodeExample, data.currentCharIndex);
             this.mountNode = container;
             appEl.append(this.mountNode);
         },
@@ -327,11 +331,11 @@ function CharacterView() {
         // granular update of this using just the textarea API, so we prefer this method for now.
         update({ data }) {
             charId = 0;
-            this.mountNode.innerHTML = buildCharacterView(data.code, data.currentCharIndex).innerHTML;
+            this.mountNode.innerHTML = buildCharacterView(data.selectedCodeExample, data.currentCharIndex).innerHTML;
         }
     };
 
-    state.subscribe(obj, ['code', 'currentCharIndex']);
+    state.subscribe(obj, ['selectedCodeExample', 'currentCharIndex']);
 }
 
 function NextChar() {
@@ -366,20 +370,63 @@ function NextChar() {
 }
 
 function ExampleSwitcher() {
-    const obj = {
-        mountNode: null,
-        mount({ data }) {
+    // implementation notes:
 
-            this.mountNode = container;
+    // HTML Attributes don't support a lot of characters, so to use the value attribute we want to
+    // preserve string uniqueness while using only supported chars. There is a way to do this:
+    // base64 encoding is lossless, but it also uses some unsupported characters ('+' and '/' and
+    // '='). Of these, string names don't seem to require '+' or '/', but '=' is used everywhere for
+    // base64's padding. Solution: replace '=' with '-', which *is* compatible, and is not already
+    // used by base64 encoding.
+
+    function codeExamplesToDomOptions(examples, selectEl) {
+        for (let key in examples) {
+            let opt = document.createElement('option');
+            opt.text = key;
+            // See impl notes.
+            opt.value = btoa(key).replace(/=/g, '-');
+
+            let matchingOpt = selectEl.querySelector(`option[value=${opt.value}]`);
+            console.log(`matching opt`, matchingOpt);
+            if (matchingOpt) {
+                // Do nothing I guess?
+            } else {
+                selectEl.add(opt);
+            }
+        }
+    }
+
+    const obj = {
+        mountNode: document.createElement('div'),
+        selectField: document.createElement('select'),
+        mount({ data }) {
+            this.mountNode.append(this.selectField);
+
+            // This initializes our state with some default code examples.
+            {
+                data.codeExamples['default'] = data.selectedCodeExample;
+                data.codeExamples['basic arithmetic'] = '3 + -5';
+                // data.codeExamples['abcdefghijklmonpqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-'] = 'encoding test';
+                state.setData({ codeExamples: data.codeExamples, });
+            }
+
+            // Update the selected example in state on select-field change, clearing the current
+            // lexing progress.
+            this.selectField.onchange = (e) => {
+                // See impl notes.
+                const value = atob(e.currentTarget.value.replace(/-/g, '='));
+                state.setData({ selectedCodeExample: data.codeExamples[value], lexingStarted: false, currentCharIndex: 0 });
+
+            };
+
             appEl.append(this.mountNode);
         },
-        update({ data }) {
-            charId = 0;
-            this.mountNode.innerHTML = buildCharacterView(data.code, data.currentCharIndex).innerHTML;
+        mountAndUpdate({ data }) {
+            codeExamplesToDomOptions(data.codeExamples, this.selectField);
         }
     };
 
-    state.subscribe(obj, ['']);
+    state.subscribe(obj, ['codeExamples'], { accesses: ['selectedCodeExample'] });
 }
 
 ///////////
@@ -409,6 +456,7 @@ function notWhitespace(str) {
 ///////////////////////////
 
 // Lexing page:
+ExampleSwitcher();
 TextArea();
 CharacterView();
 NextChar();
