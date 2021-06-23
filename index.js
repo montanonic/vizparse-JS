@@ -40,7 +40,11 @@ const state = {
             //     examples: ['john', '_func', '_', 'John_Adams', 'FOOL', 'jim1_23', 'x1', 'y2']
             // }
         ],
-        selectedCodeExample: `
+        selectedCodeExample: 'default',
+        // This will be a lookup table of all code examples. You can set a name and it will
+        // auto-save when you select a new one. This let's you iteratively test.
+        codeExamples: {
+            default: `
 function garbage(x, y) {
     return x + y;
 }
@@ -51,9 +55,8 @@ if garbage(3, 4) != 10 {
 else {
     // cry
 }`.trim(),
-        // This will be a lookup table of all code examples. You can set a name and it will
-        // auto-save when you select a new one. This let's you iteratively test.
-        codeExamples: {},
+            "basic arithmetic": '3 + -5',
+        },
     },
 
     /// Takes an object containing the fields you wish to update in the state along with their new
@@ -70,18 +73,30 @@ else {
     setupDataForPassingToComponents(fields, accesses) {
         // Prepare to grab all fields + non-subscribed accesses from our state's data.
         fields = [...fields, ...accesses];
-        let data = {};
-        // Get the data for all the fields the component is subscribed to. We do
-        // a deep clone of each fetched field here, ensuring that any mutation
-        // doesn't alter the root state unless given as a return value in
-        // setData.
-        for (let field of fields) {
-            data[field] = cloneDeep(this.data[field]);
-        }
-        // Add get handlers for the data to ensure only subscribed fields are
-        // accessed.
-        data = new Proxy(data, getDataHandler(fields));
-        return data;
+
+        // Do note that fields behind this proxy can still be mutated through methods (arrays, objects) and indexing.
+        const dataProxy = new Proxy({}, {
+            // Ensure only subscribed + fields are available, in addition to "accesses".
+            get: (_self, field) => {
+                let isSubscribed = false;
+                // Verify that `field` is inside of the `fields` value above
+                for (let subbedField of fields) {
+                    if (subbedField === field) {
+                        isSubscribed = true;
+                    }
+                }
+
+                if (!isSubscribed) {
+                    throw new Error(`you're not subscribed to the field '${field}, please subscribe (or place it in 'accesses') before attempting to access it`)
+                } else {
+                    return this.data[field];
+                }
+            },
+            set: function () {
+                throw new Error(`you shouldn't mutate state directly; use setData.`);
+            }
+        });
+        return dataProxy;
     },
 
     /// Use this to set-up reactivity amongst your components. It will mount them all, using their
@@ -96,6 +111,7 @@ else {
             // abstract the code out.
             const data = this.setupDataForPassingToComponents(fields, opts.accesses);
 
+            component.data = data;
             component.mount({ data });
             component.mountAndUpdate && component.mountAndUpdate({ data });
         }
@@ -172,6 +188,7 @@ else {
                 // use that value in manual calls to update. As long as the synchronization code is
                 // correct, that will ensure that the values are always up-to-date from central.
                 for (let [component, data, _opts] of componentsToUpdate) {
+                    component.data = data;
                     component.mountAndUpdate && component.mountAndUpdate({ data });
                     component.update && component.update({ data });
                 }
@@ -221,9 +238,6 @@ function cloneDeep(data) {
     }
 }
 
-// Idea: use a Proxy wrapper around `data` with a getter, and make it throw an error if you access a
-// field that doesn't exist in a state.
-
 function TextArea() {
     function longestCodeLineLength(code) {
         const lines = code.split('\n');
@@ -241,41 +255,39 @@ function TextArea() {
     }
 
     const obj = {
-        mountNode: null,
-        mount({ data }) {
-            const { selectedCodeExample } = data;
+        mountNode: document.createElement('textarea'),
+        mount() {
+            const { selectedCodeExample, codeExamples } = this.data;
+            const currentText = codeExamples[selectedCodeExample];
 
-            let currentText = selectedCodeExample;
-            let textarea = document.createElement('textarea');
-            this.mountNode = textarea;
-            textarea.textContent = currentText;
             this.updateTextArea(currentText);
 
             // When we update our textAreas here, we want to ensure that they update the state model.
-            textarea.addEventListener('keydown', e => this.updateTextArea(e.target.value, true));
-            textarea.addEventListener('keyup', e => this.updateTextArea(e.target.value, true));
-            textarea.addEventListener('keypress', e => this.updateTextArea(e.target.value, true));
+            this.mountNode.addEventListener('keydown', e => this.updateTextArea(e.target.value, true));
+            this.mountNode.addEventListener('keyup', e => this.updateTextArea(e.target.value, true));
+            this.mountNode.addEventListener('keypress', e => this.updateTextArea(e.target.value, true));
 
-            appEl.append(textarea);
+            appEl.append(this.mountNode);
         },
         updateTextArea(currentText, setData) {
             this.mountNode.rows = numberOfLines(currentText) + 1;
             this.mountNode.cols = longestCodeLineLength(currentText) - 1;
             this.mountNode.textContent = currentText;
             if (setData) {
-                state.setData({ selectedCodeExample: currentText });
+                state.setData({
+                    codeExamples:
+                        { ...this.data.codeExamples, [this.data.selectedCodeExample]: currentText }
+                });
             }
         },
-        update({ data }) {
-            const { selectedCodeExample, lexingStarted } = data;
-            this.updateTextArea(selectedCodeExample);
-            if (lexingStarted) {
-                this.mountNode.disabled = true;
-            }
+        update() {
+            const { lexingStarted, codeExamples, selectedCodeExample } = this.data;
+            this.updateTextArea(codeExamples[selectedCodeExample]);
+            this.mountNode.disabled = lexingStarted;
         }
     };
 
-    state.subscribe(obj, ['selectedCodeExample', 'lexingStarted']);
+    state.subscribe(obj, ['selectedCodeExample', 'codeExamples', 'lexingStarted']);
 };
 
 /// The id-generation code assumes only one character view exists at a time.
@@ -293,7 +305,6 @@ function CharacterView() {
             div.innerHTML = char;
             div.className = "char";
             div.id = `char-${charId}`;
-            charId += 1;
 
             if (char == ' ') {
                 div.className += ' space';
@@ -304,6 +315,7 @@ function CharacterView() {
             }
 
             row.append(div);
+            charId += 1;
         }
         return row;
     }
@@ -321,21 +333,24 @@ function CharacterView() {
 
     const obj = {
         mountNode: null,
-        mount({ data }) {
-            const container = buildCharacterView(data.selectedCodeExample, data.currentCharIndex);
+        mount() {
+            const { selectedCodeExample, codeExamples, currentCharIndex } = this.data;
+            const container = buildCharacterView(codeExamples[selectedCodeExample], currentCharIndex);
             this.mountNode = container;
             appEl.append(this.mountNode);
         },
         // This does a full re-draw of every div, which is an expensive thing to do in the DOM
         // because new objects are created for each. But, it's a pain and the ass to do a more
         // granular update of this using just the textarea API, so we prefer this method for now.
-        update({ data }) {
+        update() {
             charId = 0;
-            this.mountNode.innerHTML = buildCharacterView(data.selectedCodeExample, data.currentCharIndex).innerHTML;
+            const { selectedCodeExample, codeExamples, currentCharIndex } = this.data;
+            const container = buildCharacterView(codeExamples[selectedCodeExample], currentCharIndex);
+            this.mountNode.innerHTML = container.innerHTML;
         }
     };
 
-    state.subscribe(obj, ['selectedCodeExample', 'currentCharIndex']);
+    state.subscribe(obj, ['selectedCodeExample', 'currentCharIndex'], { accesses: ['codeExamples'] });
 }
 
 function NextChar() {
@@ -348,11 +363,10 @@ function NextChar() {
 
     currentListener = null;
     const obj = {
-        mountNode: null,
+        mountNode: document.createElement('button'),
         mount() {
-            const nextCharButton = document.createElement('button');
+            const nextCharButton = this.mountNode;
             nextCharButton.innerHTML = "Next Char"
-            this.mountNode = nextCharButton;
             appEl.append(this.mountNode);
         },
         mountAndUpdate({ data }) {
@@ -363,10 +377,18 @@ function NextChar() {
                 }
                 state.setData(updated);
             }
+
+            if (matchingRules(data.tokenRules).length === 0) {
+                this.mountNode.title = 'the current character does not satisfy any rules';
+                this.mountNode.disabled = true;
+            } else {
+                this.mountNode.title = null;
+                this.mountNode.disabled = false;
+            }
         }
     };
 
-    state.subscribe(obj, ['currentCharIndex', 'lexingStarted']);
+    state.subscribe(obj, ['currentCharIndex', 'lexingStarted', 'tokenRules']);
 }
 
 function ExampleSwitcher() {
@@ -387,9 +409,9 @@ function ExampleSwitcher() {
             opt.value = btoa(key).replace(/=/g, '-');
 
             let matchingOpt = selectEl.querySelector(`option[value=${opt.value}]`);
-            console.log(`matching opt`, matchingOpt);
+            // console.log(`matching opt`, matchingOpt);
             if (matchingOpt) {
-                // Do nothing I guess?
+                // Do nothing I guess? Options will *not* 
             } else {
                 selectEl.add(opt);
             }
@@ -399,34 +421,48 @@ function ExampleSwitcher() {
     const obj = {
         mountNode: document.createElement('div'),
         selectField: document.createElement('select'),
-        mount({ data }) {
+        mount() {
             this.mountNode.append(this.selectField);
-
-            // This initializes our state with some default code examples.
-            {
-                data.codeExamples['default'] = data.selectedCodeExample;
-                data.codeExamples['basic arithmetic'] = '3 + -5';
-                // data.codeExamples['abcdefghijklmonpqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-'] = 'encoding test';
-                state.setData({ codeExamples: data.codeExamples, });
-            }
 
             // Update the selected example in state on select-field change, clearing the current
             // lexing progress.
             this.selectField.onchange = (e) => {
                 // See impl notes.
-                const value = atob(e.currentTarget.value.replace(/-/g, '='));
-                state.setData({ selectedCodeExample: data.codeExamples[value], lexingStarted: false, currentCharIndex: 0 });
-
+                const exampleName = atob(e.currentTarget.value.replace(/-/g, '='));
+                state.setData({ selectedCodeExample: exampleName, lexingStarted: false, currentCharIndex: 0 });
             };
 
             appEl.append(this.mountNode);
         },
-        mountAndUpdate({ data }) {
-            codeExamplesToDomOptions(data.codeExamples, this.selectField);
+        mountAndUpdate() {
+            codeExamplesToDomOptions(this.data.codeExamples, this.selectField);
         }
     };
 
     state.subscribe(obj, ['codeExamples'], { accesses: ['selectedCodeExample'] });
+}
+
+function RuleSpace() {
+    const obj = {
+        mountNode: document.createElement('div'),
+        ruleArea: document.createElement('div'),
+        mount() {
+            const p = document.createElement('p');
+            p.textContent = `
+                Rulespace:
+            `;
+            this.mountNode.append(p);
+
+            this.mountNode.append(this.ruleArea);
+
+            appEl.append(this.mountNode);
+        },
+        mountAndUpdate() {
+        },
+        update() { },
+    };
+
+    state.subscribe(obj, []);
 }
 
 ///////////
@@ -451,6 +487,16 @@ function notWhitespace(str) {
     return !/\s+/s.test(str);
 }
 
+function matchingRules(rules, charBuffer) {
+    let matches = [];
+    for (rule of rules) {
+        if (rule.matcher(charBuffer)) {
+            matches.push(rule);
+        }
+    }
+    return matches;
+}
+
 ///////////////////////////
 // New reactivity design //
 ///////////////////////////
@@ -458,9 +504,9 @@ function notWhitespace(str) {
 // Lexing page:
 ExampleSwitcher();
 TextArea();
+RuleSpace();
 CharacterView();
 NextChar();
-
 
 // Begin app:
 state.reactifyYourApp();
